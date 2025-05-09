@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -23,6 +25,8 @@ import (
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/hive"
 	"github.com/cilium/hive/cell"
+
+	runtimeMetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 var defaultRegistryConfig = RegistryConfig{
@@ -73,7 +77,30 @@ type Registry struct {
 
 // Gather exposes metrics gather functionality, used by operator metrics command.
 func (reg *Registry) Gather() ([]*dto.MetricFamily, error) {
-	return reg.inner.Gather()
+	return multiRegistry{reg.inner, runtimeMetrics.Registry}.Gather()
+}
+
+type multiRegistry []prometheus.Gatherer
+
+func (mg multiRegistry) Gather() ([]*dto.MetricFamily, error) {
+	out := []*dto.MetricFamily{}
+	var errs error
+	for i, reg := range mg {
+		ms, err := reg.Gather()
+		if err != nil {
+			// Note: The Gatherer interface specifies that implementations should
+			// still try to return as many metrics even if an error is encountered.
+			errs = errors.Join(errs, fmt.Errorf("registry %d: %w", i, err))
+			continue
+		}
+		for _, m := range ms {
+			out = append(out, m)
+		}
+	}
+	slices.SortFunc(out, func(a, b *dto.MetricFamily) int {
+		return strings.Compare(a.GetName(), b.GetName())
+	})
+	return out, errs
 }
 
 func (reg *Registry) AddServerRuntimeHooks() {
@@ -81,7 +108,11 @@ func (reg *Registry) AddServerRuntimeHooks() {
 		// The Handler function provides a default handler to expose metrics
 		// via an HTTP server. "/metrics" is the usual endpoint for that.
 		mux := http.NewServeMux()
-		mux.Handle("/metrics", promhttp.HandlerFor(reg.inner, promhttp.HandlerOpts{}))
+		rs := multiRegistry{
+			reg.inner,
+			runtimeMetrics.Registry,
+		}
+		mux.Handle("/metrics", promhttp.HandlerFor(rs, promhttp.HandlerOpts{}))
 		srv := http.Server{
 			Addr:    reg.params.Config.PrometheusServeAddr,
 			Handler: mux,
