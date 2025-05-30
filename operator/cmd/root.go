@@ -509,21 +509,32 @@ var legacyCell = cell.Module(
 	metrics.Metric(NewUnmanagedPodsMetric),
 )
 
-func registerLegacyOnLeader(lc cell.Lifecycle, clientset k8sClient.Clientset, resources operatorK8s.Resources, factory store.Factory, svcResolver *dial.ServiceResolver, cfgMCSAPI cmoperator.MCSAPIConfig, cfgClusterMeshPolicy cmtypes.PolicyConfig, metrics *UnmanagedPodsMetric, logger *slog.Logger) {
+type params struct {
+	cell.In
+	Lifecycle   cell.Lifecycle
+	Clientset   k8sClient.Clientset
+	Resources   operatorK8s.Resources
+	Factory     store.Factory
+	SvcResolver *dial.ServiceResolver
+	CfgMCSAPI   cmoperator.MCSAPIConfig
+	Metrics     *UnmanagedPodsMetric
+	Logger      *slog.Logger
+}
+
+func registerLegacyOnLeader(p params) {
 	ctx, cancel := context.WithCancel(context.Background())
 	legacy := &legacyOnLeader{
-		ctx:                  ctx,
-		cancel:               cancel,
-		clientset:            clientset,
-		resources:            resources,
-		storeFactory:         factory,
-		svcResolver:          svcResolver,
-		cfgMCSAPI:            cfgMCSAPI,
-		cfgClusterMeshPolicy: cfgClusterMeshPolicy,
-		metrics:              metrics,
-		logger:               logger,
+		ctx:          ctx,
+		cancel:       cancel,
+		clientset:    p.Clientset,
+		resources:    p.Resources,
+		storeFactory: p.Factory,
+		svcResolver:  p.SvcResolver,
+		cfgMCSAPI:    p.CfgMCSAPI,
+		metrics:      p.Metrics,
+		logger:       p.Logger,
 	}
-	lc.Append(cell.Hook{
+	p.Lifecycle.Append(cell.Hook{
 		OnStart: legacy.onStart,
 		OnStop:  legacy.onStop,
 	})
